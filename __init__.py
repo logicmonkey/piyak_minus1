@@ -41,6 +41,9 @@ from datetime import datetime, timedelta
 from math import degrees, radians, cos, sin, asin, sqrt, pi
 from tcx import tcx_preamble, tcx_trackpoint, tcx_postamble
 
+import os
+os.environ['KIVY_WINDOW'] = 'egl_rpi'
+
 class Gauge(Widget):
     '''
     Gauge class
@@ -48,7 +51,7 @@ class Gauge(Widget):
     '''
 
     unit        = NumericProperty(225/10) # 1 needle tick = 180+45 degrees divided by range
-    tacho       = BoundedNumericProperty(0, min = 0, max = 10, errorvalue = 10)
+    hrpm        = BoundedNumericProperty(0, min = 0, max = 10, errorvalue = 10)
     speed       = BoundedNumericProperty(0, min = 0, max = 15, errorvalue = 15)
     distance    = BoundedNumericProperty(0, min = 0, max = 50000, errorvalue = 0)
     elapsed     = StringProperty(str(datetime.now()))
@@ -100,7 +103,10 @@ class Gauge(Widget):
 
         self.bind(pos=self._update)
         self.bind(size=self._update)
-        self.bind(tacho=self._turn)
+        self.bind(hrpm=self._turn)
+        self.bind(speed=self._turn)
+        self.bind(distance=self._turn)
+        self.bind(elapsed=self._turn)
 
     def _update(self, *args):
         '''
@@ -124,7 +130,7 @@ class Gauge(Widget):
         '''
         self._needle.center_x = self._gauge.center_x
         self._needle.center_y = self._gauge.center_y
-        self._needle.rotation = -self.tacho * self.unit
+        self._needle.rotation = -self.hrpm * self.unit
         self._speed.text      = "[color=5599ff][b]{0:.1f}[/b][/color]".format(self.speed)
         self._distance.text   = "[color=99ff55][b]{0:.0f}m[/b][/color]".format(self.distance)
         self._elapsed.text    = "[b]{}[/b]".format(self.elapsed)
@@ -189,14 +195,14 @@ if __name__ == '__main__':
 
     # ------------------------------------------------------------------------------
 
-    stepcount = 500
-    dtheta    = 2*pi/stepcount # assuming curves have 2*pi periodicity
-    theta     = 0
-    track     = []
-    dist      = 0
-    q         = {}
+    TRACKRES = 500
+    dtheta   = 2*pi/TRACKRES # assuming curves have 2*pi periodicity
+    theta    = 0
+    track    = []
+    dist     = 0
+    q        = {}
 
-    for step in range(stepcount):
+    for step in range(TRACKRES):
         # calculate xy coordinates and map to geographical.
         # R in km and geometry x,y in km {lat, lon} in degrees
         p = geographical(geometry(theta))
@@ -219,46 +225,58 @@ if __name__ == '__main__':
 
     time_start = datetime.now()
     timestamps = []
-    trackptr   = 0
-    lap_count  = 0
+
+    trackptr         = 0
+    lap_count        = 0
 
     class GaugeApp(App):
 
         def build(self):
             box = BoxLayout(orientation='horizontal', padding=5)
-            self.gauge = Gauge(tacho=0, size_gauge=768, size_text=25)
+            self.gauge = Gauge(hrpm=0, speed=0, distance=0,  size_gauge=768, size_text=25)
 
             box.add_widget(self.gauge)
-            Clock.schedule_interval(lambda *t: self.gauge_update(), 0.03)
+            Clock.schedule_interval(lambda *t: self.gauge_update(), 0.10)
             return box
 
         def gauge_update(self):
-            global pin, time_start, track, timestamps, trackptr, lap_count, lap_distance
+            global pin, time_start, track, timestamps, lap_distance, lap_count, trackptr
 
             time_now = datetime.now()
 
             time_delta = time_now - time_start
             hour, remr = divmod(time_delta.seconds, 60*60)
             mins, secs = divmod(remr, 60)
+            self.gauge.elapsed  = "{:02d}:{:02d}:{:02d}".format(hour, mins, secs)
 
             pin_delta      = pin._delta
             pin_eventcount = pin._eventcount
 
-            if pin_delta is not None:
-                hrpm = 600000 / pin_delta        # hrpm = (60 * 1/Tus)/100
+            if pin_eventcount > 0:
+                # the GPIO pin timer clock is 1 MHz <=> 1 us period
+                # count hundreds of rpm, i.e. hrpm = 60*1E6/(100*delta)
+                hrpm = 600000 / pin_delta
+                # using 750 rpm = 11 kph as a model, kph = rpm * 11/750
+                # then kph = 60*1E6/delta * 11/750 = 880000/delta
                 kph  = 880000 / pin_delta        # 11 kph = 750 rpm
+                # using 60 mins * 750 rpm = 11 km, 1 rev = 11E3/(60*750) metres
+                # 1 rev = 11000/(60*750) = 11/45 = 0.244.. m
                 dist = pin_eventcount * 0.2444444444
 
-                self.gauge.tacho    = hrpm
+                self.gauge.hrpm     = hrpm
                 self.gauge.speed    = kph
                 self.gauge.distance = dist
-                self.gauge.elapsed  = "{:02d}:{:02d}:{:02d}".format(hour, mins, secs)
 
                 if dist > (track[trackptr]['dist'] + lap_count*lap_distance):
                     timestamps.append({'time': time_now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3], 'speed': kph, 'dist': dist})
-                    trackptr = (trackptr + 1) % len(track)
-                    if trackptr == 0:
-                        lap_count += 1
+                    # let the trackpointer roll over at the end of each lap
+                    # but update the lap count too
+                    lap_count, trackptr = divmod(len(timestamps), TRACKRES)
+
+            else:
+                self.gauge.hrpm     = 0
+                self.gauge.speed    = 0
+                self.gauge.distance = 0
 
     GaugeApp().run()
 
@@ -287,8 +305,8 @@ if __name__ == '__main__':
     activity = open('activity_{}.tcx'.format(time_start.strftime("%Y%m%d%H%M")), 'w')
     activity.write(tcx_preamble.format(time_start_str, time_start_str, time_elapsed.seconds, total_distance, max_speed, calories))
 
-    for tp in range(len(timestamps)):
-        activity.write(tcx_trackpoint.format(timestamps[tp]['time'], track[tp%stepcount]['lat'], track[tp%stepcount]['lon'], elevation, timestamps[tp]['dist'], timestamps[tp]['speed']))
+    for tp in range(len(timestamps)): # loop over all trackpoints reached
+        activity.write(tcx_trackpoint.format(timestamps[tp]['time'], track[tp%TRACKRES]['lat'], track[tp%TRACKRES]['lon'], elevation, timestamps[tp]['dist'], timestamps[tp]['speed']))
 
     activity.write(tcx_postamble.format(average_speed))
     activity.close()
