@@ -139,8 +139,8 @@ class Gauge(Widget):
 if __name__ == '__main__':
 
     o = {'lat':  53.8100160, 'lon':   -1.9596520} # oxenhope
-    o = {'lat':  21.2765000, 'lon': -157.8460000} # waikiki
     o = {'lat': -34.2452585, 'lon':   18.6372443} # capetown
+    o = {'lat':  21.2765000, 'lon': -157.8460000} # waikiki
 
     R = 6371  # earth radius in km
     r = 1.00  # radius used in xy geometry
@@ -180,8 +180,8 @@ if __name__ == '__main__':
 
     def geometry(t):
         #x, y = circle(t)
-        x, y = bernoulli(t)
-        #x, y = gerono(t)
+        #x, y = bernoulli(t)
+        x, y = gerono(t)
         return (x, y)
 
     # ------------------------------------------------------------------------------
@@ -219,7 +219,7 @@ if __name__ == '__main__':
 
     # -------------------------------------------------------------------------
 
-    GPIO_PIN = 7
+    GPIO_PIN = 2
     device   = pigpio.pi()
     pin      = gpio_pin(device, GPIO_PIN)
 
@@ -252,13 +252,14 @@ if __name__ == '__main__':
             pin_delta      = pin._delta
             pin_eventcount = pin._eventcount
 
-            if pin_eventcount > 0:
+            if pin_eventcount > 0 and pin_delta != None:
+
                 # the GPIO pin timer clock is 1 MHz <=> 1 us period
                 # count hundreds of rpm, i.e. hrpm = 60*1E6/(100*delta)
-                hrpm = 600000 / pin_delta
+                hrpm = 600000.0 / pin_delta
                 # using 750 rpm = 11 kph as a model, kph = rpm * 11/750
                 # then kph = 60*1E6/delta * 11/750 = 880000/delta
-                kph  = 880000 / pin_delta        # 11 kph = 750 rpm
+                kph  = 880000.0 / pin_delta        # 11 kph = 750 rpm
                 # using 60 mins * 750 rpm = 11 km, 1 rev = 11E3/(60*750) metres
                 # 1 rev = 11000/(60*750) = 11/45 = 0.244.. m
                 dist = pin_eventcount * 0.2444444444
